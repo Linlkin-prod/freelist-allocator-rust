@@ -1,5 +1,6 @@
 use core::alloc::Layout;
 use core::{ptr, mem};
+use std::os::raw;
 
 const HEAP_SIZE : usize = 1024 * 1024; // 1 MiB
 
@@ -7,8 +8,9 @@ static mut HEAP : [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 #[repr(C)]
 struct BlockHeader {
+    // Size of the block after the header
+    // (back_ptr + padding + user data + free space)
     size: usize,
-    is_free: bool,
     next: *mut BlockHeader,
 }
 
@@ -26,8 +28,7 @@ impl FreeListAllocator {
 
         let header = self.heap_start as *mut BlockHeader;
         unsafe {
-            (*header).size = self.heap_size - mem::size_of::<BlockHeader>();
-            (*header).is_free = true;
+            (*header).size = self.heap_size - mem::size_of::<BlockHeader>();    
             (*header).next = ptr::null_mut();
         }
         self.head = header;
@@ -37,18 +38,31 @@ impl FreeListAllocator {
         let mut prev: *mut BlockHeader = ptr::null_mut();
         let mut current = self.head;
 
+        let header_size = mem::size_of::<BlockHeader>();
+        let back_ptr_size = mem::size_of::<*mut BlockHeader>();
+
         while !current.is_null() {
+
+            let block_start = current as usize;
+            let raw_user_start = block_start + header_size + back_ptr_size;
+            let user_start = align_up(raw_user_start, layout.align());
+            let padding = user_start - (block_start + header_size);
+            let bytes_consumed_in_block = layout.size() + padding + back_ptr_size;
+
             unsafe {
-                if (*current).is_free && (*current).size >= layout.size() {
+                if (*current).size >= bytes_consumed_in_block {
                 
                     if prev.is_null() {
                         self.head = (*current).next;
                     } else {
                         (*prev).next = (*current).next;
                     }
-                    (*current).is_free = false;
-
-                    return (current as *mut u8).add(mem::size_of::<BlockHeader>());
+                    
+                    // Store back-pointer just before user data
+                    let back_ptr_location = (user_start - back_ptr_size) as *mut *mut BlockHeader;
+                    *back_ptr_location = current;
+                    
+                    return user_start as *mut u8;
                 }
 
                 prev = current;
@@ -65,9 +79,9 @@ impl FreeListAllocator {
         }
 
         unsafe {
-            let header = (ptr as *mut BlockHeader).sub(1);
+            let back_ptr_location = (ptr as *mut *mut BlockHeader).offset(-1);
+            let header = *back_ptr_location;
 
-            (*header).is_free = true;
             (*header).next = self.head;
 
             self.head = header;
@@ -81,4 +95,9 @@ pub fn create_allocator() -> FreeListAllocator {
         heap_size: 0,
         head: ptr::null_mut(),
     }
+}
+
+fn align_up(addr : usize, align : usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    (addr + align - 1) & !(align - 1)
 }
