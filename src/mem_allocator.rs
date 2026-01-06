@@ -1,6 +1,5 @@
 use core::alloc::Layout;
 use core::{ptr, mem};
-use std::os::raw;
 
 const HEAP_SIZE : usize = 1024 * 1024; // 1 MiB
 
@@ -58,7 +57,6 @@ impl FreeListAllocator {
                         (*prev).next = (*current).next;
                     }
                     
-                    // Store back-pointer just before user data
                     let back_ptr_location = (user_start - back_ptr_size) as *mut *mut BlockHeader;
                     *back_ptr_location = current;
                     
@@ -71,6 +69,27 @@ impl FreeListAllocator {
         }
 
         ptr::null_mut()
+    }
+
+    pub unsafe fn alloc_string(&mut self, string: &str) -> *mut u8 {
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(string.len(), 1);
+            let ptr = self.alloc(layout);
+            if !ptr.is_null() {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(string.as_ptr(), ptr, string.len());
+                }
+            }
+            ptr
+        }
+        
+    }
+
+    pub unsafe fn ptr_to_str(&self, ptr: *mut u8, len: usize) -> &str {
+        unsafe {
+            let slice = core::slice::from_raw_parts(ptr, len);
+            core::str::from_utf8(slice).unwrap()
+        }
     }
 
     pub unsafe fn dealloc(&mut self, ptr: *mut u8) {
