@@ -1,43 +1,80 @@
+#![allow(dead_code)]
+
+
 mod mem_allocator;
-use mem_allocator::create_allocator;
 use core::alloc::Layout;
 
+
 fn main() {
-    println!("Memory Allocator Test");
-    let mut allocator = create_allocator();
     
-    // Initialize the allocator
+    mem_allocator::init_allocator();
+
+    println!("Allocator initialized");
+
+    // =========================
+    // Box<T>
+    // =========================
+    let a = Box::new(42);
+    let b = Box::new(1337);
+
+    println!("Box a = {}", a);
+    println!("Box b = {}", b);
+
+    // =========================
+    // Vec<T>
+    // =========================
+    let mut v = Vec::new();
+
+    for i in 0..10 {
+        v.push(i * i);
+    }
+
+    println!("Vec = {:?}", v);
+
+    // =========================
+    // String
+    // =========================
+    let s = String::from("Hello allocator!");
+    println!("String = {}", s);
+
+    // =========================
+    // Stress test
+    // =========================
+    for i in 0..100 {
+        let x = Box::new(i);
+        drop(x);
+    }
+
+    println!("Stress test done");
+
+    // =========================
+    // Raw allocation
+    // =========================
     unsafe {
-        allocator.init();
-        
-        // Allocate of an integer
-        let layout = Layout::new::<i32>();
-        let ptr = allocator.alloc(layout);
-        
-        if !ptr.is_null() {
-            // Write to allocated memory
-            *(ptr as *mut i32) = 42;
-            println!("Allocated memory, value: {}", *(ptr as *mut i32));
-            
-            // Deallocate memory
-            allocator.dealloc(ptr);
-            println!("Memory deallocated");
-        } else {
-            println!("Allocation failed");
+        let layout = Layout::from_size_align(64, 8).unwrap();
+        let ptr = std::alloc::alloc(layout);
+
+        if ptr.is_null() {
+            panic!("allocation failed");
         }
 
-        // Allocation of a string
-        let test_str = "Hello, Memory Allocator!";
-        let str_ptr = allocator.alloc_string(test_str);
-        if !str_ptr.is_null() {
-            let retrieved_str = allocator.ptr_to_str(str_ptr, test_str.len());
-            println!("Allocated string: {}", retrieved_str);
-            
-            // Deallocate string memory
-            allocator.dealloc(str_ptr);
-            println!("String memory deallocated");
-        } else {
-            println!("String allocation failed");
+        // Write data
+        for i in 0..64 {
+            ptr.add(i).write(i as u8);
         }
+
+        // Freed data
+        std::alloc::dealloc(ptr, layout);
+    }
+
+    println!("Manual allocation OK");
+
+    // Display debug logs
+    println!("\n=== Debug Logs ===");
+    let logs = mem_allocator::get_debug_logs();
+    if let Ok(log_str) = core::str::from_utf8(logs) {
+        println!("{}", log_str);
+    } else {
+        println!("(Debug logs contain invalid UTF-8)");
     }
 }
