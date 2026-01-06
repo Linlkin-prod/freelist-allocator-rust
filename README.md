@@ -1,81 +1,122 @@
 # Freelist Allocator Rust
 
-A custom memory allocator implementation in Rust using a free list algorithm.
+A custom memory allocator implementation in Rust using a free list algorithm with block splitting and coalescence.
 
 ## Overview
 
-This project implements a simple but functional memory allocator with the following features:
+This project implements a functional memory allocator with the following features:
 
-- **Free List Algorithm**: Tracks free and allocated memory blocks using a linked list
-- **Fixed Heap Size**: 1 MiB pre-allocated heap (for now, mb dynamic later)
-- **Block Header Metadata**: Each allocation includes header information for size and status tracking
-- **Allocation & Deallocation**: Core memory management operations
+- **Free List Algorithm**: Manages free and allocated memory blocks using a linked list structure
+- **Block Splitting**: Automatically splits large free blocks to reduce memory waste
+- **Block Coalescence**: Merges adjacent free blocks to prevent fragmentation
+- **Alignment Support**: Respects custom alignment requirements for allocations
+- **GlobalAlloc Trait**: Integrates with Rust's standard allocator interface
+- **Debug Logging**: Built-in debug logging system (4KB buffer) for troubleshooting
+- **Fixed Heap Size**: 1 MiB pre-allocated heap
 
 ## Architecture
 
 ### Components
 
-- **`FreeListAllocator`**: Main allocator struct managing the heap
-- **`BlockHeader`**: Metadata structure for tracking block information
-  - `size`: Size of the allocated/free block
-  - `is_free`: Boolean flag indicating if block is available
-  - `next`: Pointer to next block in the free list
+- **`FreeListAllocator`**: Core allocator managing the heap with first-fit allocation strategy
+- **`SAllocator`**: Thread-safe wrapper implementing the `GlobalAlloc` trait
+- **`BlockHeader`**: Metadata structure for each memory block
+  - `size`: Size of the block's user data (excluding header and alignment padding)
+  - `next`: Pointer to the next block in the free list
+- **`DebugLogger`**: Circular buffer for allocation event logging
 
 ### Heap Management
 
-- Total heap size: 1 MiB (1024 * 1024 bytes) (for now)
-- Static mutable buffer storing the heap data
-- Initialization sets up the first free block spanning the entire heap
+- **Total heap size**: 1 MiB (1024 * 1024 bytes)
+- **Static allocation**: Pre-allocated 16-byte aligned heap buffer
+- **Initialization**: Sets up the first free block spanning the entire heap
+- **Minimum block size**: Enforced to prevent fragmentation
+- **Alignment handling**: Supports arbitrary power-of-two alignment requirements
+
+## Algorithm Details
+
+### Allocation (First-Fit Strategy)
+1. Searches the free list for the first block large enough to satisfy the request
+2. Applies alignment padding before the user data
+3. Splits the block if remaining space exceeds the minimum threshold
+4. Returns a pointer to aligned user data
+
+### Deallocation
+1. Locates the block header using a back pointer stored before user data
+2. Reinserts the block into the free list in sorted order
+3. **Forward coalescing**: Merges with the next block if adjacent
+4. **Backward coalescing**: Merges with the previous block if adjacent
 
 ## Usage
 
+### Basic Example
+
 ```rust
-use mem_alloc_rust::create_allocator;
+fn main() {
+    let a = Box::new(42);
+    let b = Box::new("Hello, World!");
+    
+    println!("Box a = {}", a);
+    println!("Box b = {}", b);
+    
+    // Display debug logs
+    let logs = mem_allocator::get_debug_logs();
+    if let Ok(log_str) = core::str::from_utf8(logs) {
+        println!("Debug logs:\n{}", log_str);
+    }
+}
+```
+
+### Direct Allocator Usage
+
+```rust
 use core::alloc::Layout;
 
-fn main() {
-    let mut allocator = create_allocator();
+unsafe {
+    let allocator = &mut *ALLOCATOR.inner.get();
+    allocator.init();
     
-    // Initialize the allocator
-    unsafe {
-        allocator.init();
-        
-        // Allocate memory
-        let layout = Layout::new::<i32>();
-        let ptr = allocator.alloc(layout);
-        
-        if !ptr.is_null() {
-            // Use allocated memory
-            *(ptr as *mut i32) = 42;
-            println!("Value: {}", *(ptr as *mut i32));
-            
-            // Free the memory
-            allocator.dealloc(ptr);
-        }
+    // Allocate memory
+    let layout = Layout::new::<i32>();
+    let ptr = allocator.alloc(layout);
+    
+    if !ptr.is_null() {
+        *(ptr as *mut i32) = 42;
+        println!("Value: {}", *(ptr as *mut i32));
+        allocator.dealloc(ptr);
     }
 }
 ```
 
 ## API
 
-### `create_allocator() -> FreeListAllocator`
-Creates a new uninitialized allocator instance.
+### Public Functions
 
-### `init(&mut self)` (unsafe)
-Initializes the allocator and sets up the heap structure.
+#### `get_debug_logs() -> &'static [u8]`
+Retrieves the current debug log buffer contents as a byte slice. Logs include allocation/deallocation events with sizes and alignments.
 
-### `alloc(&mut self, layout: Layout) -> *mut u8` (unsafe)
-Allocates memory according to the specified layout. Returns a raw mutable pointer to the allocated memory, or a null pointer if allocation fails.
+#### `clear_debug_logs()`
+Clears the debug log buffer, resetting it for fresh logging.
 
-### `dealloc(&mut self, ptr: *mut u8)` (unsafe)
-Deallocates memory at the given pointer, marking it as free for future allocations.
+## Debug Logging
 
-## Safety
+Debug logs are automatically captured during:
+- **Allocator initialization** - Records heap setup
+- **Memory allocation** - Logs allocation size and alignment requirements
+- **Memory deallocation** - Records dealloc pointer addresses
 
-All unsafe operations are contained within explicit `unsafe` blocks and require careful usage. The allocator:
-- Works with raw pointers and mutable statics
-- Requires the caller to ensure proper pointer alignment and validity
-- Does not protect against use-after-free or double-free errors
+Logs are only generated in debug builds (`#[cfg(debug_assertions)]`) to minimize overhead in release mode.
+
+## Safety Considerations
+
+- All unsafe operations are contained within explicit `unsafe` blocks
+- The allocator uses raw pointers to avoid mutable static reference violations
+- Proper alignment is maintained throughout the allocation process
+- Back pointers enable efficient deallocation without external tracking
+- Users must ensure:
+  - No use-after-free violations
+  - No double-free errors
+  - Correct Layout specifications
 
 ## Building
 
@@ -89,15 +130,21 @@ cargo build
 cargo run
 ```
 
+## Testing
+
+```bash
+cargo test
+```
+
 ## Requirements
 
-- Rust 2024 edition or later
+- Rust 1.70+ (stable)
+- Nightly Rust features: `alloc_error_handler` (for panic on allocation failure)
 - `core` library (no_std compatible)
 
-## Future Improvements
+## Performance Characteristics
 
-- Fragmentation reduction strategies
-- Memory coalescing
-- Support for custom heap sizes
-- Thread-safe allocator variant
-- Benchmarking and optimization
+- **Allocation**: O(n) where n = number of free blocks (first-fit search)
+- **Deallocation**: O(n) for free list reinsertion and coalescing
+- **Fragmentation**: Minimized through block splitting and coalescence strategies
+- **Memory overhead**: ~24 bytes per block (BlockHeader + back pointer + alignment)
