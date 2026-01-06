@@ -115,10 +115,40 @@ impl FreeListAllocator {
         unsafe {
             let back_ptr_location = (ptr as *mut *mut BlockHeader).offset(-1);
             let header = *back_ptr_location;
+            let mut prev : *mut BlockHeader = ptr::null_mut();
+            let mut current = self.head;
 
-            (*header).next = self.head;
+            while !current.is_null() && (current as usize) < (header as usize) {
+                prev = current;
+                current = (*current).next;
+            }
+
+            (*header).next = current;
+
+            if prev.is_null() {
+                self.head = header;
+            } else {
+                (*prev).next = header;
+            }
 
             self.head = header;
+
+            let header_end = (header as usize) + mem::size_of::<BlockHeader>() + (*header).size;
+
+            if !(*header).next.is_null() && header_end == (*header).next as usize {
+                let next_block = (*header).next;
+                (*header).size += mem::size_of::<BlockHeader>() + (*next_block).size;
+                (*header).next = (*next_block).next;
+
+            }
+
+            if prev.is_null() == false {
+                let prev_end = (prev as usize) + mem::size_of::<BlockHeader>() + (*prev).size;
+                if prev_end == (header as usize) {
+                    (*prev).size += mem::size_of::<BlockHeader>() + (*header).size;
+                    (*prev).next = (*header).next;
+                }
+            }
         }
     }
 }
