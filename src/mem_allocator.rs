@@ -50,13 +50,28 @@ impl FreeListAllocator {
 
             unsafe {
                 if (*current).size >= bytes_consumed_in_block {
-                
-                    if prev.is_null() {
-                        self.head = (*current).next;
+                    if can_be_split((*current).size, &layout){
+                        let unaligned_addr = block_start + header_size + bytes_consumed_in_block;
+                        let new_block_addr = align_up(unaligned_addr, mem::align_of::<BlockHeader>()) as *mut BlockHeader;
+                        (*new_block_addr).size = (*current).size - bytes_consumed_in_block - header_size;
+                        (*new_block_addr).next = (*current).next;
+
+                        (*current).size = bytes_consumed_in_block - header_size;
+                        (*current).next = ptr::null_mut();
+
+                        if prev.is_null() {
+                            self.head = new_block_addr;
+                        } else {
+                            (*prev).next = new_block_addr;
+                        }
                     } else {
-                        (*prev).next = (*current).next;
+                
+                        if prev.is_null() {
+                            self.head = (*current).next;
+                        } else {
+                            (*prev).next = (*current).next;
+                        }
                     }
-                    
                     let back_ptr_location = (user_start - back_ptr_size) as *mut *mut BlockHeader;
                     *back_ptr_location = current;
                     
@@ -119,4 +134,10 @@ pub fn create_allocator() -> FreeListAllocator {
 fn align_up(addr : usize, align : usize) -> usize {
     debug_assert!(align.is_power_of_two());
     (addr + align - 1) & !(align - 1)
+}
+
+fn can_be_split(size: usize, layout: &Layout) -> bool {
+    let header_size = mem::size_of::<BlockHeader>();
+    let back_ptr_size = mem::size_of::<*mut BlockHeader>();
+    size >= layout.size() + header_size + back_ptr_size
 }
